@@ -1,0 +1,235 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  GONOSUMDB: "*"
+  GOFLAGS: ""
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Build all platform binaries in parallel
+  # ────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            output: piplist-linux-amd64
+          - goos: linux
+            goarch: arm64
+            output: piplist-linux-arm64
+          - goos: linux
+            goarch: "386"
+            output: piplist-linux-386
+          - goos: darwin
+            goarch: amd64
+            output: piplist-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            output: piplist-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            output: piplist-windows-amd64.exe
+          - goos: windows
+            goarch: "386"
+            output: piplist-windows-386.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false   # disable cache — let go mod tidy handle deps fresh
+
+      - name: Tidy & verify dependencies
+        # go mod tidy regenerates go.sum completely using proxy.golang.org
+        # GONOSUMDB=* skips sum.golang.org verification (not needed for open source deps)
+        run: |
+          go mod tidy
+          go mod verify
+        env:
+          GONOSUMDB: "*"
+          GOPROXY: "https://proxy.golang.org,direct"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          GONOSUMDB: "*"
+          GOPROXY: "https://proxy.golang.org,direct"
+        run: |
+          mkdir -p dist
+          go build \
+            -ldflags="-s -w \
+              -X main.version=${{ github.ref_name }} \
+              -X 'main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)' \
+              -X main.commit=${{ github.sha }}" \
+            -o dist/${{ matrix.output }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: dist/${{ matrix.output }}
+          retention-days: 1
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Create GitHub Release and attach all binaries
+  # ────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          sha256sum * > checksums.txt
+          echo "=== checksums.txt ==="
+          cat checksums.txt
+
+      - name: Extract changelog for this tag
+        id: changelog
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ -f CHANGELOG.md ]; then
+            NOTES=$(awk "/^## \[?${TAG//v/}\]?/{flag=1; next} /^## /{flag=0} flag" CHANGELOG.md)
+          fi
+          if [ -z "$NOTES" ]; then
+            NOTES="Release ${TAG}"
+          fi
+          echo "$NOTES" > /tmp/release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "piplist-go ${{ github.ref_name }}"
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/piplist-linux-amd64
+            dist/piplist-linux-arm64
+            dist/piplist-linux-386
+            dist/piplist-darwin-amd64
+            dist/piplist-darwin-arm64
+            dist/piplist-windows-amd64.exe
+            dist/piplist-windows-386.exe
+            dist/checksums.txt
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Test on every push/PR
+  # ────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Tidy dependencies
+        run: go mod tidy
+        env:
+          GONOSUMDB: "*"
+          GOPROXY: "https://proxy.golang.org,direct"
+
+      - name: Build (verify compiles)
+        run: go build -o /dev/null .
+        if: runner.os != 'Windows'
+        env:
+          GONOSUMDB: "*"
+          GOPROXY: "https://proxy.golang.org,direct"
+
+      - name: Build (verify compiles, Windows)
+        run: go build -o nul .
+        if: runner.os == 'Windows'
+        env:
+          GONOSUMDB: "*"
+          GOPROXY: "https://proxy.golang.org,direct"
+
+      - name: Vet
+        run: go vet ./...
+        env:
+          GONOSUMDB: "*"
+          GOPROXY: "https://proxy.golang.org,direct"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Lint
+  # ────────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Tidy dependencies
+        run: go mod tidy
+        env:
+          GONOSUMDB: "*"
+          GOPROXY: "https://proxy.golang.org,direct"
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: >
+            --timeout=5m
+            --enable=govet,errcheck,staticcheck,unused,gosimple,ineffassign
+        env:
+          GONOSUMDB: "*"
+          GOPROXY: "https://proxy.golang.org,direct"

@@ -1,0 +1,10 @@
+
+# Ignore Sublime Text project files
+*.sublime-*
+
+# Added entries (2 items)
+*.exe
+*.bak
+
+# Added entries (1 items)
+piplist-*
