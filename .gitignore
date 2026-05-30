@@ -8,3 +8,8 @@
 
 # Added entries (1 items)
 piplist-*
+# PT backup directory
+.pt/
+
+# Added entries (1 items)
+gitignore_backup/

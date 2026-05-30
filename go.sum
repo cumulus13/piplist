@@ -1,0 +1,6 @@
+github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
+github.com/cumulus13/go-config-get v1.0.15 h1:zh64Zb62IBPRKsPxL25R5pZurmO2+H0bSmoaSsK897Q=
+github.com/cumulus13/go-config-get v1.0.15/go.mod h1:AQiRBq3kDjHgJBqR4lXSHJUz0urfsM/7JqwR95zw2T0=
+github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyuac5Z2hdY=
+github.com/mitchellh/mapstructure v1.5.0/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
